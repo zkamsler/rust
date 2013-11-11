@@ -237,7 +237,7 @@ fn rustpkg_exec() -> Path {
 fn command_line_test(args: &[~str], cwd: &Path) -> ProcessOutput {
     match command_line_test_with_env(args, cwd, None) {
         Success(r) => r,
-        Fail(error) => fail!("Command line test failed with error {}", error)
+        Fail(outp) => fail!("Command line test failed with error {}", outp.status)
     }
 }
 
@@ -251,15 +251,15 @@ fn command_line_test_expect_fail(args: &[~str],
                                  expected_exitcode: int) {
     match command_line_test_with_env(args, cwd, env) {
         Success(_) => fail!("Should have failed with {}, but it succeeded", expected_exitcode),
-        Fail(error) if error == expected_exitcode => (), // ok
-        Fail(other) => fail!("Expected to fail with {}, but failed with {} instead",
-                              expected_exitcode, other)
+        Fail(ref error) if error.status == expected_exitcode => (), // ok
+        Fail(ref other) => fail!("Expected to fail with {}, but failed with {} instead",
+                              expected_exitcode, other.status)
     }
 }
 
 enum ProcessResult {
     Success(ProcessOutput),
-    Fail(int) // exit code
+    Fail(ProcessOutput)
 }
 
 /// Runs `rustpkg` (based on the directory that this executable was
@@ -291,9 +291,9 @@ fn command_line_test_with_env(args: &[~str], cwd: &Path, env: Option<~[(~str, ~s
                    output.status);
     if output.status != 0 {
         debug!("Command {} {:?} failed with exit code {:?}; its output was --- {} ---",
-              cmd, args, output.status,
+               cmd, args, output.status,
               str::from_utf8(output.output) + str::from_utf8(output.error));
-        Fail(output.status)
+        Fail(output)
     }
     else {
         Success(output)
@@ -612,7 +612,6 @@ fn test_install_valid() {
 }
 
 #[test]
-#[ignore]
 fn test_install_invalid() {
     let sysroot = test_sysroot();
     let pkgid = fake_pkg();
@@ -628,8 +627,11 @@ fn test_install_invalid() {
                                   pkgid.clone());
         ctxt.install(pkg_src, &WhatToBuild::new(MaybeCustom, Everything));
     };
-    assert!(result.unwrap_err()
-            .to_str().contains("supplied path for package dir does not exist"));
+    let x = result.unwrap_err();
+    assert!(x.is::<~str>());
+    let error_string = *x.move::<~str>().unwrap();
+    debug!("result error = {}", error_string);
+    assert!(error_string.contains("supplied path for package dir does not exist"));
 }
 
 #[test]
@@ -660,7 +662,6 @@ fn test_install_valid_external() {
 }
 
 #[test]
-#[ignore(reason = "9994")]
 fn test_install_invalid_external() {
     let cwd = os::getcwd();
     command_line_test_expect_fail([~"install", ~"foo"],
@@ -1091,7 +1092,7 @@ fn no_rebuilding() {
 
     match command_line_test_partial([~"build", ~"foo"], workspace) {
         Success(*) => (), // ok
-        Fail(status) if status == 65 => fail!("no_rebuilding failed: it tried to rebuild bar"),
+        Fail(ref r) if r.status == 65 => fail!("no_rebuilding failed: it tried to rebuild bar"),
         Fail(_) => fail!("no_rebuilding failed for some other reason")
     }
 }
@@ -1109,7 +1110,7 @@ fn no_rebuilding_dep() {
     assert!(chmod_read_only(&bar_lib));
     match command_line_test_partial([~"build", ~"foo"], workspace) {
         Success(*) => (), // ok
-        Fail(status) if status == 65 => fail!("no_rebuilding_dep failed: it tried to rebuild bar"),
+        Fail(ref r) if r.status == 65 => fail!("no_rebuilding_dep failed: it tried to rebuild bar"),
         Fail(_) => fail!("no_rebuilding_dep failed for some other reason")
     }
 }
@@ -1129,7 +1130,7 @@ fn do_rebuild_dep_dates_change() {
 
     match command_line_test_partial([~"build", ~"foo"], workspace) {
         Success(*) => fail!("do_rebuild_dep_dates_change failed: it didn't rebuild bar"),
-        Fail(status) if status == 65 => (), // ok
+        Fail(ref r) if r.status == 65 => (), // ok
         Fail(_) => fail!("do_rebuild_dep_dates_change failed for some other reason")
     }
 }
@@ -1150,7 +1151,7 @@ fn do_rebuild_dep_only_contents_change() {
     // should adjust the datestamp
     match command_line_test_partial([~"build", ~"foo"], workspace) {
         Success(*) => fail!("do_rebuild_dep_only_contents_change failed: it didn't rebuild bar"),
-        Fail(status) if status == 65 => (), // ok
+        Fail(ref r) if r.status == 65 => (), // ok
         Fail(_) => fail!("do_rebuild_dep_only_contents_change failed for some other reason")
     }
 }
@@ -2126,7 +2127,7 @@ fn test_rebuild_when_needed() {
     chmod_read_only(&test_executable);
     match command_line_test_partial([~"test", ~"foo"], foo_workspace) {
         Success(*) => fail!("test_rebuild_when_needed didn't rebuild"),
-        Fail(status) if status == 65 => (), // ok
+        Fail(ref r) if r.status == 65 => (), // ok
         Fail(_) => fail!("test_rebuild_when_needed failed for some other reason")
     }
 }
@@ -2146,7 +2147,7 @@ fn test_no_rebuilding() {
     chmod_read_only(&test_executable);
     match command_line_test_partial([~"test", ~"foo"], foo_workspace) {
         Success(*) => (), // ok
-        Fail(status) if status == 65 => fail!("test_no_rebuilding failed: it rebuilt the tests"),
+        Fail(ref r) if r.status == 65 => fail!("test_no_rebuilding failed: it rebuilt the tests"),
         Fail(_) => fail!("test_no_rebuilding failed for some other reason")
     }
 }
@@ -2341,7 +2342,7 @@ fn test_c_dependency_no_rebuilding() {
 
     match command_line_test_partial([~"build", ~"cdep"], dir) {
         Success(*) => (), // ok
-        Fail(status) if status == 65 => fail!("test_c_dependency_no_rebuilding failed: \
+        Fail(ref r) if r.status == 65 => fail!("test_c_dependency_no_rebuilding failed: \
                                               it tried to rebuild foo.c"),
         Fail(_) => fail!("test_c_dependency_no_rebuilding failed for some other reason")
     }
@@ -2378,8 +2379,23 @@ fn test_c_dependency_yes_rebuilding() {
     match command_line_test_partial([~"build", ~"cdep"], dir) {
         Success(*) => fail!("test_c_dependency_yes_rebuilding failed: \
                             it didn't rebuild and should have"),
-        Fail(status) if status == 65 => (),
+        Fail(ref r) if r.status == 65 => (),
         Fail(_) => fail!("test_c_dependency_yes_rebuilding failed for some other reason")
+    }
+}
+
+#[test]
+fn test_bad_package_id_url() {
+    use str::{is_utf8, from_utf8};
+
+    match command_line_test_partial([~"install", ~"git://github.com/mozilla/servo.git"],
+                                    &os::getcwd()) {
+        Fail(ProcessOutput{ error: _, output: output, _}) => {
+            assert!(is_utf8(output));
+            assert!(from_utf8(output).contains("rustpkg operates on package IDs; did you mean to \
+                                               write `github.com/mozilla/servo` instead"));
+        }
+        Success(*)  => fail!("test_bad_package_id_url: succeeded but should have failed")
     }
 }
 

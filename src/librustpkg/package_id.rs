@@ -11,7 +11,8 @@
 use version::{try_getting_version, try_getting_local_version,
               Version, NoVersion, split_version};
 use std::hash::Streaming;
-use std::hash;
+use std::{char, hash};
+use messages::error;
 
 /// Path-fragment identifier of a package such as
 /// 'github.com/graydon/test'; path must be a relative
@@ -41,9 +42,73 @@ impl Eq for PkgId {
     }
 }
 
+// n.b. This code is pretty silly; we should use the real URL library.
+fn drop_url_scheme<'a>(s: &'a str) -> Option<&'a str> {
+    let mut is_url = true;
+    let mut seen = 0;
+    let mut result = None;
+    for substr in s.split_str_iter("://") {
+        debug!("Scanning {}", substr);
+        for c in substr.iter() {
+            if !is_url_part(c) {
+                is_url = false;
+                break;
+            }
+        }
+        if seen == 1 {
+            let no_extension = substr.trim_right_chars(&|c: char| c != '.');
+            result = Some(no_extension.slice_to(no_extension.len() - 1));
+        }
+        seen += 1;
+    }
+    if is_url && seen > 1 {
+        result
+    } else {
+        None
+    }
+}
+
+// n.b. This code is pretty silly; we should use the real URL library.
+fn is_url_part(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '-' || ch == '_' || ch.is_digit() || ch == '.' || ch == '/' ||
+        (ch > '\x7f' && (char::is_XID_start(ch) || char::is_XID_continue(ch)))
+}
+
+// Fails if this is not a legal package ID,
+// after printing a hint
+fn ensure_legal_package_id(s: &str) {
+    let mut legal = true;
+    for ch in s.iter() {
+        // Hack to ignore everything after the optional '#'
+        if ch == '#' {
+            break;
+        }
+        if !is_url_part(ch) {
+            legal = false;
+            break;
+        }
+    }
+    if !legal {
+        let maybe_intended_path = drop_url_scheme(s);
+        debug!("is {} a URL? {}", s, maybe_intended_path.is_some());
+
+        for maybe_package_id in maybe_intended_path.iter() {
+            error(format!("rustpkg operates on package IDs; did you mean to write \
+                          `{}` instead of `{}`?",
+                  *maybe_package_id,
+                  s));
+        }
+        fail!("Can't parse {} as a package ID", s);
+    }
+}
+
 impl PkgId {
     pub fn new(s: &str) -> PkgId {
         use conditions::bad_pkg_id::cond;
+
+        // Make sure the path is a legal package ID -- it might not even
+        // be a legal path, so we do this first
+        ensure_legal_package_id(s);
 
         let mut given_version = None;
 
